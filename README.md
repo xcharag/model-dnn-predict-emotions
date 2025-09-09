@@ -42,7 +42,37 @@ This repository contains Python code for performing emotion classification using
 
 ## Getting Started
 
-For detailed usage instructions and explanations, please refer to the code comments and accompanying documentation in the repository.
+### Prerequisites
+- Python 3.7+
+- Required packages: tensorflow, scikit-learn, pandas, numpy, matplotlib, seaborn, scipy, plotly
+
+Install the packages using:
+```
+pip install tensorflow scikit-learn pandas numpy matplotlib seaborn scipy plotly
+```
+
+### Data
+Download the EEG emotions dataset from Kaggle: [EEG Brainwave Dataset: Feeling Emotions](https://www.kaggle.com/datasets/birdy654/eeg-brainwave-dataset-feeling-emotions)
+
+Place the `emotions.csv` file in the project directory.
+
+### Training the Model
+Run the training script:
+```
+python train.py
+```
+This will train the model and save it as `eeg_emotion_model.h5` along with the scaler as `scaler.pkl`.
+
+### Live Prediction
+To perform live emotion prediction:
+1. Modify the `get_live_eeg_features()` function in `predict.py` to extract features from your EEG device.
+2. Run the prediction script:
+```
+python predict.py
+```
+This will start a loop that continuously predicts emotions from live EEG data.
+
+For detailed usage instructions and explanations, please refer to the code comments.
 
 ## Customization
 
