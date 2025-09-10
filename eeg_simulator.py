@@ -43,6 +43,9 @@ class EEGSimulator:
         self.buffer_index = 0
         self.is_running = False
 
+        # Accumulate features for CSV saving at the end
+        self.accumulated_features = []
+
         # Emotion parameters based on real EEG dataset analysis
         # These values are derived from the actual training data statistics
         self.emotion_params = {
@@ -364,16 +367,10 @@ class EEGSimulator:
             # Initialize buffers
             self.initialize_buffers()
 
-            # Create CSV file for streaming data
-            csv_file = 'realtime_eeg_data.csv'
-            feature_columns = [f'feature_{i}' for i in range(self.n_channels * 15)] + ['emotion']
+            # Clear accumulated features
+            self.accumulated_features = []
 
-            # Write header
-            with open(csv_file, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(feature_columns)
-
-            print(f"Streaming data will be saved to {csv_file}")
+            print("Streaming data will be accumulated and saved to CSV at the end.")
 
             while self.is_running:
                 try:
@@ -387,10 +384,8 @@ class EEGSimulator:
                     # Extract features from current window
                     features = self.extract_windowed_features()
 
-                    # Save to CSV
-                    with open(csv_file, 'a', newline='') as f:
-                        writer = csv.writer(f)
-                        writer.writerow(features)
+                    # Accumulate features for later CSV saving
+                    self.accumulated_features.append(features)
 
                     # Update visualization (every few updates to avoid too frequent refreshes)
                     if self.buffer_index % (self.sampling_rate // 2) == 0:  # Update every 0.5 seconds
@@ -488,6 +483,21 @@ class EEGSimulator:
 
             if self.sim_thread and self.sim_thread.is_alive():
                 self.sim_thread.join(timeout=1.0)
+
+            # Save accumulated features to CSV
+            if self.accumulated_features:
+                csv_file = 'realtime_eeg_data.csv'
+                feature_columns = [f'feature_{i}' for i in range(self.n_channels * 15)] + ['emotion']
+
+                with open(csv_file, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(feature_columns)
+                    for features in self.accumulated_features:
+                        writer.writerow(features)
+
+                print(f"Saved {len(self.accumulated_features)} feature vectors to {csv_file}")
+            else:
+                print("No features accumulated.")
 
             print("Real-time EEG streaming simulation stopped.")
 
@@ -1070,44 +1080,6 @@ class EEGSimulator:
             self.init_brain_diagram()
 
         self.canvas.draw()
-
-    def simulate(self):
-        """Main simulation loop using realistic EEG data generation"""
-        while self.is_running:
-            # Generate realistic EEG data matching training dataset
-            eeg_data = self.generate_realistic_eeg_data()
-
-            # For visualization, create a time series from the generated features
-            # Use first few features to create a representative signal
-            time_series = self.create_time_series_from_features(eeg_data)
-
-            # Save to CSV for model input (simulate the full feature vector)
-            feature_names = [f'feature_{i}' for i in range(len(eeg_data))]
-            df = pd.DataFrame([eeg_data], columns=feature_names)
-            df.to_csv('live_eeg.csv', index=False)
-
-            # Update plots with the time series representation
-            self.root.after(0, lambda: self.update_plots_with_realistic_data(eeg_data, time_series))
-
-            self.status_label.config(text=f"Simulating {self.current_emotion} - Realistic data generated")
-            time.sleep(1)  # Update every second
-
-    def start_simulation(self):
-        if not self.is_running:
-            self.is_running = True
-            self.sim_thread = threading.Thread(target=self.simulate)
-            self.sim_thread.start()
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            self.status_label.config(text="Status: Running")
-
-    def stop_simulation(self):
-        if self.is_running:
-            self.is_running = False
-            self.sim_thread.join()
-            self.start_btn.config(state=tk.NORMAL)
-            self.stop_btn.config(state=tk.DISABLED)
-            self.status_label.config(text="Status: Stopped")
 
 if __name__ == "__main__":
     root = tk.Tk()
