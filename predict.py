@@ -1,58 +1,164 @@
 import numpy as np
+import pandas as pd
 import tensorflow as tf
-import pickle
 from sklearn.preprocessing import StandardScaler
+import pickle
+import os
+import random
+from scipy import signal
 
-# Load the trained model
+# Check if required files exist
+if not os.path.exists('eeg_emotion_model.h5'):
+    print("Error: Model file 'eeg_emotion_model.h5' not found!")
+    print("Please run train.py first to create the model.")
+    exit(1)
+
+if not os.path.exists('scaler.pkl'):
+    print("Error: Scaler file 'scaler.pkl' not found!")
+    print("Please run train.py first to create the scaler.")
+    exit(1)
+
+# Load the trained model and scaler
 model = tf.keras.models.load_model('eeg_emotion_model.h5')
-
-# Get the number of features from the model
-n_features = model.input_shape[1]
-
-# Load the scaler
 with open('scaler.pkl', 'rb') as f:
     scaler = pickle.load(f)
 
-# Label mapping
-label_mapping = {0: 'NEGATIVE', 1: 'NEUTRAL', 2: 'POSITIVE'}
+# Label mapping (reverse for predictions)
+label_mapping_reverse = {0: 'NEGATIVE', 1: 'NEUTRAL', 2: 'POSITIVE'}
 
+print("Model and scaler loaded successfully.")
+print("Waiting for EEG simulator data...")
+
+# Function to get live EEG features (read from simulator CSV)
 def get_live_eeg_features():
-    """
-    Placeholder function to get live EEG features.
-    Replace this with actual code to extract features from your EEG device.
-    Should return a numpy array of shape (n_features,) where n_features matches the training data.
-    For example, compute FFT features from live EEG signal.
-    """
-    # For example, if reading from a file or device
-    # Here, I'll simulate with random data for demonstration
-    # In real use, extract FFT or other features from live EEG signal
-    return np.random.rand(n_features)
-
-def predict_emotion(features):
-    # Preprocess
-    features_scaled = scaler.transform(features.reshape(1, -1))
-    # Predict
-    prediction = model.predict(features_scaled)
-    predicted_label = np.argmax(prediction)
-    emotion = label_mapping[predicted_label]
-    confidence = prediction[0][predicted_label]
-    return emotion, confidence
-
-# Main loop for live prediction
-print("Starting live emotion prediction...")
-while True:
     try:
-        # Get live features
-        features = get_live_eeg_features()
-        # Predict
-        emotion, confidence = predict_emotion(features)
-        print(f"Predicted Emotion: {emotion} with confidence {confidence:.3f}")
-        # Add delay or condition to control prediction rate
-        import time
-        time.sleep(1)  # Predict every second, adjust as needed
-    except KeyboardInterrupt:
-        print("Stopping prediction.")
-        break
+        # Read the full feature vector from simulator (2548 features)
+        df = pd.read_csv('live_eeg.csv')
+
+        # The simulator now generates all 2548 features directly
+        # Extract feature values (skip any non-numeric columns)
+        feature_cols = [col for col in df.columns if col.startswith('feature_')]
+        if feature_cols:
+            # Use the first row of features
+            features = df[feature_cols].iloc[0].values
+            return features
+        else:
+            # Fallback: try to use all numeric columns
+            numeric_data = df.select_dtypes(include=[np.number])
+            if not numeric_data.empty:
+                features = numeric_data.iloc[0].values
+                # Ensure we have 2548 features
+                if len(features) < 2548:
+                    features = np.pad(features, (0, 2548 - len(features)), 'constant')
+                elif len(features) > 2548:
+                    features = features[:2548]
+                return features
+
+        print("No suitable feature columns found in CSV. Using random data.")
+        return np.random.rand(2548)
+
+    except FileNotFoundError:
+        print("Simulator file not found. Using random data.")
+        return np.random.rand(2548)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error reading simulator data: {e}. Using random data.")
+        return np.random.rand(2548)
+
+# Function to retrain the model with new data
+def retrain_model():
+    try:
+        # Load original data
+        import kagglehub
+        path = kagglehub.dataset_download("birdy654/eeg-brainwave-dataset-feeling-emotions")
+        csv_path = os.path.join(path, 'emotions.csv')
+        original_data = pd.read_csv(csv_path)
+        original_data['label'] = original_data['label'].map({'NEGATIVE': 0, 'NEUTRAL': 1, 'POSITIVE': 2})
+
+        # Load new data if exists
+        new_data_path = 'new_data.csv'
+        if os.path.exists(new_data_path):
+            new_data = pd.read_csv(new_data_path)
+
+            # Handle different column formats
+            if 'label' in new_data.columns:
+                # New data has label column
+                new_features = new_data.drop('label', axis=1)
+                new_labels = new_data['label']
+            else:
+                # New data doesn't have label, use all columns as features
+                new_features = new_data
+                new_labels = pd.Series([0] * len(new_data))  # Default to NEGATIVE
+
+            # Ensure feature count matches
+            if new_features.shape[1] != original_data.shape[1] - 1:  # -1 for label column
+                print(f"Feature count mismatch: original has {original_data.shape[1]-1}, new has {new_features.shape[1]}")
+                # Pad or truncate to match
+                target_features = original_data.shape[1] - 1
+                if new_features.shape[1] < target_features:
+                    padding = np.zeros((len(new_features), target_features - new_features.shape[1]))
+                    new_features = np.concatenate([new_features.values, padding], axis=1)
+                else:
+                    new_features = new_features.values[:, :target_features]
+
+                new_features = pd.DataFrame(new_features, columns=original_data.columns[:-1])
+
+            combined_data = pd.concat([original_data, pd.concat([new_features, new_labels], axis=1)], ignore_index=True)
+        else:
+            combined_data = original_data
+
+        # Preprocess
+        X = combined_data.drop('label', axis=1)
+        y = combined_data['label']
+        X_scaled = scaler.fit_transform(X)  # Refit scaler on combined data
+
+        # Retrain (quick epochs for incremental update)
+        model.fit(X_scaled, y, epochs=10, batch_size=32, verbose=0)
+
+        # Save updated model and scaler
+        model.save('eeg_emotion_model.h5')
+        with open('scaler.pkl', 'wb') as f:
+            pickle.dump(scaler, f)
+        print("Model retrained and saved.")
+
+    except Exception as e:
+        print(f"Error during retraining: {e}")
+        print("Continuing with original model...")
+
+# Main prediction loop
+prediction_count = 0
+retrain_interval = 10  # Retrain every 10 predictions
+
+while True:
+    # Get live features
+    features = get_live_eeg_features()
+    features_scaled = scaler.transform(features.reshape(1, -1))
+    
+    # Predict
+    prediction = model.predict(features_scaled, verbose=0)
+    predicted_label = np.argmax(prediction)
+    predicted_emotion = label_mapping_reverse[predicted_label]
+    print(f"Predicted Emotion: {predicted_emotion}")
+    
+    # Get user feedback
+    correct_label = input("Enter the correct emotion (NEGATIVE/NEUTRAL/POSITIVE) or 'skip' to continue: ").strip().upper()
+    if correct_label in ['NEGATIVE', 'NEUTRAL', 'POSITIVE']:
+        # Save new data point with correct format
+        label_num = {'NEGATIVE': 0, 'NEUTRAL': 1, 'POSITIVE': 2}[correct_label]
+
+        # Create DataFrame with feature columns and label
+        feature_dict = {f'feature_{i}': [features[i]] for i in range(len(features))}
+        feature_dict['label'] = [label_num]
+
+        new_row = pd.DataFrame(feature_dict)
+        new_row.to_csv('new_data.csv', mode='a', header=not os.path.exists('new_data.csv'), index=False)
+        prediction_count += 1
+
+        print(f"Added new training sample with label: {correct_label}")
+
+        # Retrain if interval reached
+        if prediction_count % retrain_interval == 0:
+            retrain_model()
+    
+    # Continue loop
+    if input("Continue predicting? (y/n): ").strip().lower() != 'y':
         break
