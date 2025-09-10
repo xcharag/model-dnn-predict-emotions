@@ -67,6 +67,8 @@ def get_live_eeg_features():
 # Function to retrain the model with new data
 def retrain_model():
     try:
+        print("Starting model retraining...")
+
         # Load original data
         import kagglehub
         path = kagglehub.dataset_download("birdy654/eeg-brainwave-dataset-feeling-emotions")
@@ -74,10 +76,13 @@ def retrain_model():
         original_data = pd.read_csv(csv_path)
         original_data['label'] = original_data['label'].map({'NEGATIVE': 0, 'NEUTRAL': 1, 'POSITIVE': 2})
 
+        print(f"Original data shape: {original_data.shape}")
+
         # Load new data if exists
         new_data_path = 'new_data.csv'
         if os.path.exists(new_data_path):
             new_data = pd.read_csv(new_data_path)
+            print(f"New data shape: {new_data.shape}")
 
             # Handle different column formats
             if 'label' in new_data.columns:
@@ -88,6 +93,8 @@ def retrain_model():
                 # New data doesn't have label, use all columns as features
                 new_features = new_data
                 new_labels = pd.Series([0] * len(new_data))  # Default to NEGATIVE
+
+            print(f"New features shape: {new_features.shape}")
 
             # Ensure feature count matches
             if new_features.shape[1] != original_data.shape[1] - 1:  # -1 for label column
@@ -102,14 +109,27 @@ def retrain_model():
 
                 new_features = pd.DataFrame(new_features, columns=original_data.columns[:-1])
 
-            combined_data = pd.concat([original_data, pd.concat([new_features, new_labels], axis=1)], ignore_index=True)
+            # Create combined data properly
+            new_data_with_label = new_features.copy()
+            new_data_with_label['label'] = new_labels.values
+
+            combined_data = pd.concat([original_data, new_data_with_label], ignore_index=True)
         else:
             combined_data = original_data
 
         # Preprocess
         X = combined_data.drop('label', axis=1)
         y = combined_data['label']
+        print(f"Combined data shape: {combined_data.shape}")
+        print(f"Features shape: {X.shape}, Labels shape: {y.shape}")
+
+        # Check for any NaN or infinite values
+        if X.isnull().any().any() or np.isinf(X.values).any():
+            print("Warning: Found NaN or infinite values in features. Filling with zeros.")
+            X = X.fillna(0).replace([np.inf, -np.inf], 0)
+
         X_scaled = scaler.fit_transform(X)  # Refit scaler on combined data
+        print(f"Scaled features shape: {X_scaled.shape}")
 
         # Retrain (quick epochs for incremental update)
         model.fit(X_scaled, y, epochs=10, batch_size=32, verbose=0)
